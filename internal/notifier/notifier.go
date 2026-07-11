@@ -51,12 +51,17 @@ func (m *NotifierManager) Register(n Notifier) {
 	m.notifiers = append(m.notifiers, n)
 }
 
-func (m *NotifierManager) NotifyAll(course interface{}, subName string) {
+func (m *NotifierManager) NotifyAll(course interface{}, subName string) error {
+	var firstErr error
 	for _, n := range m.notifiers {
 		if err := n.NotifyNewCourse(course, subName); err != nil {
 			log.Printf("notifier %s error: %v", n.Name(), err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }
 
 func LoadTelegramFromDB(getConfig func(string) (string, error)) *TelegramNotifier {

@@ -109,10 +109,13 @@ func (sch *Scheduler) RunUpdate() {
 					FilterKey: filterKey,
 					FirstSeen: time.Now(),
 				}
-				sch.db.SaveCourse(sc)
-
 				// Notify
-				sch.notifiers.NotifyAll(c, sub.Name)
+				if err := sch.notifiers.NotifyAll(c, sub.Name); err != nil {
+					log.Printf("Failed to notify %s, skipping database save to retry later", c.ID)
+					continue
+				}
+
+				sch.db.SaveCourse(sc)
 				log.Printf("NEW COURSE: %s (sub: %s)", c.Title, sub.Name)
 			}
 		}
