@@ -1,0 +1,330 @@
+package views
+
+import (
+	"fmt"
+	"github.com/alpine/senai-courses-track/internal/scraper"
+	"github.com/alpine/senai-courses-track/internal/storage"
+)
+
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html lang="pt-BR">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title }</title>
+			<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+			<script src="https://cdn.tailwindcss.com"></script>
+			<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+			<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet"/>
+			<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+			<style>
+				.htmx-indicator{display:none}
+				.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:flex}
+			</style>
+		</head>
+		<body class="bg-gray-50 text-gray-800 font-sans min-h-screen">
+			<nav class="bg-red-700 text-white shadow-md">
+				<div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
+					<h1 class="text-xl font-bold flex items-center gap-2">
+						<i class="fa-solid fa-graduation-cap text-2xl"></i>
+						SENAI Track
+					</h1>
+					<button hx-get="/courses/live" hx-target="#live-courses" hx-indicator="#global-sync-loading" class="bg-white text-red-700 px-4 py-1.5 rounded font-semibold text-sm hover:bg-gray-100 flex items-center gap-2 shadow-sm transition-all">
+						<i class="fa-solid fa-rotate-right"></i>
+						Sincronizar Agora
+					</button>
+				</div>
+			</nav>
+			<div id="trigger-result" class="max-w-7xl mx-auto px-4 mt-4 empty:hidden"></div>
+			<div id="global-sync-loading" class="htmx-indicator max-w-7xl mx-auto px-4 mt-4 items-center gap-3 text-red-700 bg-red-50 border border-red-100 rounded-lg py-3 shadow-sm">
+				<i class="fa-solid fa-circle-notch fa-spin text-lg"></i>
+				<span class="font-medium">Sincronizando cursos com o SENAI...</span>
+			</div>
+			<main class="max-w-7xl mx-auto px-4 py-8">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+templ Dashboard(tokenConfigured bool, chat string, interval string, subs []storage.Subscription, courses []storage.StoredCourse, liveCourses []scraper.Course, cities []scraper.CityOption) {
+	@Layout("SENAI Tracker - Dashboard") {
+		<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+			<div class="md:col-span-2 space-y-6">
+				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
+					<h2 class="text-xl font-semibold mb-4 text-gray-700 border-b pb-2 flex items-center gap-2">
+						<i class="fa-solid fa-plus-circle text-red-600"></i>
+						Nova Assinatura
+					</h2>
+					<form hx-post="/api/subscriptions/htmx" hx-target="#subscriptions-list" class="space-y-4">
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+							<div>
+								<label class="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+								<input name="name" type="text" placeholder="Ex: Cursos TI Piracicaba" required class="w-full border border-gray-300 rounded-md px-3 py-2"/>
+							</div>
+							<div>
+								<label class="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
+								<select id="cidade-select" name="cidadeint" placeholder="Digite para buscar uma cidade" class="w-full border border-gray-300 rounded-md px-3 py-2">
+									<option value="">Todas as cidades</option>
+									for _, city := range cities {
+										<option value={ city.Value }>{ city.Label }</option>
+									}
+								</select>
+							</div>
+						</div>
+						<div class="flex items-center gap-6 pt-2">
+							<label class="flex items-center gap-2 cursor-pointer"><input name="gratuito" type="checkbox" value="1"/> Gratuitos</label>
+							<label class="flex items-center gap-2 cursor-pointer"><input name="modalidade" type="checkbox" value="1"/> Presencial</label>
+						</div>
+						<button type="submit" class="w-full bg-red-600 text-white font-medium py-2 px-4 rounded-md hover:bg-red-700">Salvar Assinatura</button>
+					</form>
+				</section>
+
+				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
+					<h2 class="text-xl font-semibold mb-4 text-gray-700 border-b pb-2 flex items-center gap-2">
+						<i class="fa-solid fa-list-check text-red-600"></i>
+						Assinaturas Ativas
+					</h2>
+					<div id="subscriptions-list">@SubscriptionsList(subs)</div>
+				</section>
+
+				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
+					<div class="flex justify-between items-center border-b pb-2 mb-4">
+						<h2 class="text-xl font-semibold text-gray-700 flex items-center gap-2">
+							<i class="fa-solid fa-fire text-orange-500"></i>
+							Cursos com Turmas Disponíveis
+						</h2>
+						<button hx-get="/courses/live" hx-target="#live-courses" hx-indicator="#live-courses-loading" class="text-sm bg-red-50 text-red-700 px-3 py-1.5 rounded hover:bg-red-100 flex items-center gap-1 transition-colors">
+							<i class="fa-solid fa-arrows-rotate"></i>
+							Atualizar do SENAI
+						</button>
+					</div>
+					<div id="live-courses-loading" class="htmx-indicator items-center justify-center gap-3 py-8 text-red-700 bg-red-50 rounded-lg border border-red-100 mb-4">
+						<i class="fa-solid fa-circle-notch fa-spin text-xl"></i>
+						<span class="font-medium">Buscando cursos, turmas e horários no SENAI...</span>
+					</div>
+					<div id="live-courses">
+						<div class="text-center py-8 text-gray-500">
+							Clique em "Atualizar do SENAI" ou "Sincronizar Agora" para carregar os cursos com turmas disponíveis.
+						</div>
+					</div>
+				</section>
+
+				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
+					<div class="flex justify-between items-center border-b pb-2 mb-4">
+						<h2 class="text-xl font-semibold text-gray-700 flex items-center gap-2">
+							<i class="fa-solid fa-clock-rotate-left text-gray-500"></i>
+							Histórico Rastreados
+						</h2>
+						<div class="flex items-center gap-2">
+							<button hx-get="/courses/list" hx-target="#courses-list" class="text-sm bg-gray-100 text-gray-700 px-3 py-1.5 rounded hover:bg-gray-200 flex items-center gap-1 transition-colors">
+								<i class="fa-solid fa-arrows-rotate"></i>
+								Atualizar lista
+							</button>
+							<button hx-delete="/api/courses/clear" hx-target="#courses-list" hx-confirm="Tem certeza que deseja limpar todo o histórico de cursos rastreados?" class="text-sm bg-red-50 text-red-700 px-3 py-1.5 rounded hover:bg-red-100 flex items-center gap-1 transition-colors">
+								<i class="fa-solid fa-trash-can"></i>
+								Limpar Histórico
+							</button>
+						</div>
+					</div>
+					<div id="courses-list">@CoursesList(courses)</div>
+				</section>
+			</div>
+
+			<div class="space-y-6">
+				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
+					<h2 class="text-xl font-semibold mb-4 text-gray-700 border-b pb-2 flex items-center gap-2">
+						<i class="fa-brands fa-telegram text-[#0088cc]"></i>
+						Notificações Telegram
+					</h2>
+					<form hx-post="/api/config/htmx" class="space-y-3 bg-[#f4f9ff] p-4 rounded-md border border-[#e1efff]">
+						<label class="block text-xs font-medium text-gray-600">Bot Token</label>
+						if tokenConfigured {
+							<input name="telegram_token" type="password" value="" placeholder="Token configurado — deixe em branco para manter" autocomplete="new-password" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
+						} else {
+							<input name="telegram_token" type="password" value="" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" autocomplete="new-password" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
+						}
+
+						<label class="block text-xs font-medium text-gray-600">Chat ID</label>
+						<input name="telegram_chat_id" type="text" value={ chat } placeholder="123456789" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
+
+						<label class="block text-xs font-medium text-gray-600">Intervalo de busca automática</label>
+						<select name="sync_interval_minutes" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+							<option value="720" selected?={ interval == "720" }>A cada 12 horas</option>
+							<option value="1440" selected?={ interval == "1440" }>Uma vez por dia</option>
+							<option value="2880" selected?={ interval == "2880" }>A cada 2 dias</option>
+						</select>
+						<p class="text-xs text-gray-500">A busca automática verifica cursos novos nos filtros ativos e avisa no Telegram.</p>
+
+						<div class="flex gap-2 pt-2">
+							<button type="submit" class="flex-1 bg-blue-600 text-white text-sm font-medium py-2 rounded hover:bg-blue-700 transition-colors shadow-sm">
+								<i class="fa-solid fa-floppy-disk mr-1"></i> Salvar
+							</button>
+							<button type="button" onclick="testTelegram()" class="flex-1 bg-white border border-blue-600 text-blue-600 text-sm font-medium py-2 rounded hover:bg-blue-50 transition-colors">
+								<i class="fa-solid fa-paper-plane mr-1"></i> Testar
+							</button>
+						</div>
+					</form>
+				</section>
+			</div>
+		</div>
+	}
+}
+
+templ SubscriptionsList(subs []storage.Subscription) {
+	if len(subs) == 0 {
+		<div class="text-center py-6 text-gray-500">Nenhuma assinatura cadastrada ainda.</div>
+	} else {
+		<ul class="divide-y divide-gray-100">
+			for _, s := range subs {
+				<li class="py-3 flex justify-between items-center">
+					<div>
+						<h4 class="font-medium text-gray-800">{ s.Name }</h4>
+						<p class="text-xs text-gray-500 font-mono mt-1">{ s.Filters }</p>
+					</div>
+					<div class="flex items-center gap-3">
+						if s.Active {
+							<span class="px-2 py-1 rounded-full bg-green-50 text-green-700 text-xs font-medium">Ativa</span>
+							<button hx-post={ "/api/subscriptions/" + fmt.Sprint(s.ID) + "/deactivate" } hx-target="#subscriptions-list" class="text-yellow-600 hover:text-yellow-700 transition-colors" title="Desativar">
+								<i class="fa-solid fa-pause"></i>
+							</button>
+						} else {
+							<span class="px-2 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-medium">Inativa</span>
+							<button hx-post={ "/api/subscriptions/" + fmt.Sprint(s.ID) + "/activate" } hx-target="#subscriptions-list" class="text-green-600 hover:text-green-700 transition-colors" title="Ativar">
+								<i class="fa-solid fa-play"></i>
+							</button>
+						}
+						<button hx-delete={ "/api/subscriptions/" + fmt.Sprint(s.ID) } hx-target="#subscriptions-list" hx-confirm="Excluir assinatura?" class="text-red-500 hover:text-red-700 transition-colors" title="Excluir">
+							<i class="fa-solid fa-xmark"></i>
+						</button>
+					</div>
+				</li>
+			}
+		</ul>
+	}
+}
+
+templ CoursesList(courses []storage.StoredCourse) {
+	if len(courses) == 0 {
+		<div class="text-center py-8 text-gray-500">Nenhum curso rastreado ainda. Clique em "Sincronizar Agora" após criar uma assinatura.</div>
+	} else {
+		<div class="overflow-x-auto">
+			<table class="min-w-full divide-y divide-gray-100 text-sm">
+				<thead>
+					<tr class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+						<th class="py-2 pr-3">Curso</th>
+						<th class="py-2 pr-3">ID</th>
+						<th class="py-2 pr-3">Filtro</th>
+						<th class="py-2 pr-3">Visto em</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-gray-100">
+					for _, c := range courses {
+						<tr>
+							<td class="py-3 pr-3">
+								<a href={ templ.URL(c.URL) } target="_blank" class="font-medium text-red-700 hover:underline">{ c.Title }</a>
+								<div class="text-xs text-gray-400 break-all">{ c.URL }</div>
+							</td>
+							<td class="py-3 pr-3 font-mono text-xs text-gray-600">{ c.ID }</td>
+							<td class="py-3 pr-3 font-mono text-xs text-gray-500 max-w-xs truncate" title={ c.FilterKey }>{ c.FilterKey }</td>
+							<td class="py-3 pr-3 text-xs text-gray-500">{ c.FirstSeen.Format("02/01/2006 15:04") }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+templ LiveCoursesList(courses []scraper.Course) {
+	if len(courses) == 0 {
+		<div class="text-center py-8 text-gray-500">Nenhum curso com turma disponível encontrado para o filtro principal.</div>
+	} else {
+		<div class="space-y-4">
+			for _, c := range courses {
+				if c.HasTurmas {
+					<div class="border border-gray-100 rounded-lg p-4 bg-gray-50">
+						<div class="flex justify-between gap-4">
+							<div>
+								<a href={ templ.URL(c.URL) } target="_blank" class="text-lg font-semibold text-red-700 hover:underline">{ c.Title }</a>
+								<div class="text-xs text-gray-500 break-all">{ c.URL }</div>
+								<div class="text-sm text-gray-600 mt-1 flex flex-wrap gap-2">
+									<span><i class="fa-solid fa-location-dot text-red-500"></i> { c.City }</span>
+									<span>·</span>
+									<span><i class="fa-solid fa-chalkboard-user text-gray-500"></i> { c.Modality }</span>
+									if c.Duration != "" {
+										<span>·</span>
+										<span><i class="fa-regular fa-clock text-blue-500"></i> Carga horária: { c.Duration }</span>
+									}
+									<span>· ID { c.ID }</span>
+								</div>
+							</div>
+							<span class="shrink-0 px-2 py-1 h-fit rounded-full bg-green-50 text-green-700 text-xs font-medium">Turma disponível</span>
+						</div>
+
+						<div class="mt-4 space-y-3">
+							for _, t := range c.Turmas {
+								<div class="bg-white border rounded p-3 text-sm">
+									<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+										<div class="col-span-2 md:col-span-4 border-b pb-2 mb-1">
+											<div class="text-xs text-gray-500">Unidade</div>
+											<div class="font-medium text-gray-800">
+												{ t.Unit }
+												if t.Phone != "" {
+													<span class="text-gray-500 text-sm ml-2">📞 { t.Phone }</span>
+		<script>
+			document.addEventListener('DOMContentLoaded', function(){
+				if (window.TomSelect && document.querySelector('#cidade-select')) {
+					new TomSelect('#cidade-select', {
+						create: false,
+						allowEmptyOption: true,
+						sortField: {field: 'text', direction: 'asc'},
+						plugins: ['dropdown_input']
+					});
+				}
+			});
+
+			async function testTelegram(){
+				const token = document.querySelector('[name=telegram_token]').value;
+				const chat = document.querySelector('[name=telegram_chat_id]').value;
+				const res = await fetch('/api/test-telegram',{
+					method:'POST',
+					headers:{'Content-Type':'application/json'},
+					body:JSON.stringify({Token:token, ChatID:chat, Message:'🤖 Teste do SENAI Tracker! Configuração OK.'})
+				});
+				if (res.ok) alert('Mensagem enviada com sucesso para o Telegram!');
+				else alert('Erro ao enviar mensagem. Verifique o Token e o Chat ID.');
+			}
+		</script>
+	}
+											</div>
+											if t.Address != "" {
+												<div class="text-sm text-gray-600 mt-0.5">📍 { t.Address }</div>
+											}
+										</div>
+										<div><div class="text-xs text-gray-500">Vagas</div><div class="font-medium">{ t.Vacancies }</div></div>
+										<div><div class="text-xs text-gray-500">Início</div><div class="font-medium">{ t.StartDate }</div></div>
+										<div><div class="text-xs text-gray-500">Fim</div><div class="font-medium">{ t.EndDate }</div></div>
+									</div>
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+										<div><div class="text-xs text-gray-500">Dias</div><div>{ t.Period }</div></div>
+										<div><div class="text-xs text-gray-500">Horário</div><div>{ t.Schedule }</div></div>
+									</div>
+									if t.Registration != "" {
+										<div class="mt-3"><span class="inline-block px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">{ t.Registration }</span></div>
+									}
+									if t.Observations != "" {
+										<details class="mt-3"><summary class="cursor-pointer text-gray-700 font-medium">Observações</summary><p class="mt-2 text-gray-600">{ t.Observations }</p></details>
+									}
+									if t.Requirements != "" {
+										<details class="mt-2"><summary class="cursor-pointer text-gray-700 font-medium">Requisitos</summary><p class="mt-2 text-gray-600">{ t.Requirements }</p></details>
+									}
+								</div>
+							}
+						</div>
+					</div>
+				}
+			}
+		</div>
+	}
+}

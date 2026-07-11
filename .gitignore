@@ -1,0 +1,30 @@
+# Runtime data and secrets
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+/bin/
+/dist/
+/senai-courses-track
+/server
+*.test
+*.out
+
+# Local tooling and generated analysis
+.graphify/
+graphify-out/
+.tmp/
+.cache/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*~
