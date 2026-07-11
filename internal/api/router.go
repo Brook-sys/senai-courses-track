@@ -107,7 +107,10 @@ func NewRouter(db *storage.DB, s *scraper.Scraper, sch *scheduler.Scheduler) *mu
 		}
 		token, _ := db.GetConfig("telegram_token")
 		chat, _ := db.GetConfig("telegram_chat_id")
-		json.NewEncoder(w).Encode(map[string]string{"telegram_token": token, "telegram_chat_id": chat})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"telegram_token_configured": token != "",
+			"telegram_chat_id":          chat,
+		})
 	}).Methods("GET", "POST")
 
 	r.HandleFunc("/api/config/htmx", func(w http.ResponseWriter, r *http.Request) {
