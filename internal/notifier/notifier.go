@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+
+	"github.com/Brook-sys/senai-courses-track/internal/scraper"
 )
 
 type Notifier interface {
@@ -23,11 +25,23 @@ func (t *TelegramNotifier) NotifyNewCourse(course interface{}, subName string) e
 	if t.Token == "" || t.ChatID == "" {
 		return nil
 	}
-	msg := fmt.Sprintf("🆕 Novo curso em %s:\n%v", subName, course)
+	c, ok := course.(scraper.Course)
+	if !ok {
+		// Fallback for raw interface
+		msg := fmt.Sprintf("🆕 Novo curso em %s:\n%v", subName, course)
+		return t.send(msg)
+	}
+
+	msg := formatCourseMessage(c, subName)
+	return t.send(msg)
+}
+
+func (t *TelegramNotifier) send(msg string) error {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.Token)
 	resp, err := http.PostForm(apiURL, url.Values{
-		"chat_id": {t.ChatID},
-		"text":    {msg},
+		"chat_id":    {t.ChatID},
+		"text":       {msg},
+		"parse_mode": {"Markdown"},
 	})
 	if err != nil {
 		return err
