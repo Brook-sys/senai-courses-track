@@ -28,3 +28,4 @@ graphify-out/
 .idea/
 .DS_Store
 *~
+.webhook_url
