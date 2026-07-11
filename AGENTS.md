@@ -31,3 +31,4 @@ go build ./cmd/server
 ```
 
 7. Faça commits pequenos e claros e envie para `origin/main` quando solicitado.
+8. Mudanças de container devem manter execução sem root, persistência em `/data`, healthcheck em `/healthz` e compatibilidade `linux/amd64` e `linux/arm64`.

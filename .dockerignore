@@ -1,0 +1,17 @@
+.git
+.github
+graphify-out
+courses.db
+courses.db-*
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.env.*
+.vscode
+.idea
+bin
+dist
+server
+senai-courses-track

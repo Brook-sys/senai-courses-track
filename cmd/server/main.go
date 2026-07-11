@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/Brook-sys/senai-courses-track/internal/api"
+	"github.com/Brook-sys/senai-courses-track/internal/appconfig"
 	"github.com/Brook-sys/senai-courses-track/internal/scheduler"
 	"github.com/Brook-sys/senai-courses-track/internal/scraper"
 	"github.com/Brook-sys/senai-courses-track/internal/storage"
@@ -12,7 +13,8 @@ import (
 )
 
 func main() {
-	db, err := storage.New("courses.db")
+	cfg := appconfig.FromEnv()
+	db, err := storage.New(cfg.DBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -28,6 +30,6 @@ func main() {
 	bot.Start()
 
 	r := api.NewRouter(db, s, sched)
-	log.Println("Server starting on :8020")
-	log.Fatal(http.ListenAndServe(":8020", r))
+	log.Printf("Server starting on %s", cfg.Addr)
+	log.Fatal(http.ListenAndServe(cfg.Addr, r))
 }

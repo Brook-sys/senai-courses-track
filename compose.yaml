@@ -1,0 +1,22 @@
+services:
+  senai-courses-track:
+    image: ghcr.io/brook-sys/senai-courses-track:latest
+    container_name: senai-courses-track
+    restart: unless-stopped
+    ports:
+      - "8020:8020"
+    environment:
+      SENAI_TRACK_ADDR: ":8020"
+      SENAI_TRACK_DB_PATH: "/data/courses.db"
+      TZ: "America/Sao_Paulo"
+    volumes:
+      - senai-courses-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8020/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  senai-courses-data:
