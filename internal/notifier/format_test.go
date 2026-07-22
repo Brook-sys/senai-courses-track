@@ -29,10 +29,10 @@ func TestFormatCourseMessage(t *testing.T) {
 	msg := formatCourseMessage(course, "Teste Hermes")
 
 	expectedLines := []string{
-		"🔔 Nova oportunidade em: *Teste Hermes*",
-		"📚 *Soldador ao Arco Elétrico e Oxigás*",
+		"🔔 Nova oportunidade em: <b>Teste Hermes</b>",
+		"📚 <b>Soldador ao Arco Elétrico e Oxigás</b>",
 		"⏱️ Carga horária: 168 horas",
-		"🔗 Abrir curso (https://www.sp.senai.br/curso/soldador-ao-arco-eletrico-e-oxigas/110125)",
+		"🔗 <a href=\"https://www.sp.senai.br/curso/soldador-ao-arco-eletrico-e-oxigas/110125\">Abrir curso</a>",
 		"🏫 Unidade: Piracicaba - Jardim Primavera",
 		"📍 Endereço: Av. Marechal Castelo Branco, 1000",
 		"☎️ Telefone: (19) 3412-3500",
@@ -44,7 +44,7 @@ func TestFormatCourseMessage(t *testing.T) {
 
 	for _, expected := range expectedLines {
 		if !strings.Contains(msg, expected) {
-			t.Errorf("Missing expected text: %s\\nGot:\\n%s", expected, msg)
+			t.Errorf("Missing expected text: %s\nGot:\n%s", expected, msg)
 		}
 	}
 }

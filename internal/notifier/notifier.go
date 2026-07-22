@@ -15,33 +15,36 @@ type Notifier interface {
 }
 
 type TelegramNotifier struct {
-	Token  string
-	ChatID string
+	GetConfig func(string) (string, error)
 }
 
 func (t *TelegramNotifier) Name() string { return "telegram" }
 
 func (t *TelegramNotifier) NotifyNewCourse(course interface{}, subName string) error {
-	if t.Token == "" || t.ChatID == "" {
+	token, _ := t.GetConfig("telegram_token")
+	chatID, _ := t.GetConfig("telegram_chat_id")
+
+	if token == "" || chatID == "" {
 		return nil
 	}
+
 	c, ok := course.(scraper.Course)
 	if !ok {
 		// Fallback for raw interface
 		msg := fmt.Sprintf("🆕 Novo curso em %s:\n%v", subName, course)
-		return t.send(msg)
+		return t.send(token, chatID, msg)
 	}
 
 	msg := formatCourseMessage(c, subName)
-	return t.send(msg)
+	return t.send(token, chatID, msg)
 }
 
-func (t *TelegramNotifier) send(msg string) error {
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.Token)
+func (t *TelegramNotifier) send(token, chatID, msg string) error {
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	resp, err := http.PostForm(apiURL, url.Values{
-		"chat_id":    {t.ChatID},
+		"chat_id":    {chatID},
 		"text":       {msg},
-		"parse_mode": {"Markdown"},
+		"parse_mode": {"HTML"},
 	})
 	if err != nil {
 		return err
@@ -78,20 +81,9 @@ func (m *NotifierManager) NotifyAll(course interface{}, subName string) error {
 	return firstErr
 }
 
-func LoadTelegramFromDB(getConfig func(string) (string, error)) *TelegramNotifier {
-	token, _ := getConfig("telegram_token")
-	chat, _ := getConfig("telegram_chat_id")
-	if token != "" && chat != "" {
-		return &TelegramNotifier{Token: token, ChatID: chat}
-	}
-	return nil
-}
-
 func RegisterFromConfig(m *NotifierManager, getConfig func(string) (string, error)) {
-	if tg := LoadTelegramFromDB(getConfig); tg != nil {
-		m.Register(tg)
-		log.Println("Telegram notifier registered")
-	}
+	m.Register(&TelegramNotifier{GetConfig: getConfig})
+	log.Println("Telegram notifier registered (dynamic)")
 }
 
 func SendTestMessage(token, chatID, msg string) error {
