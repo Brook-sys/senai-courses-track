@@ -1,14 +1,18 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Brook-sys/senai-courses-track/internal/notifier"
 	"github.com/Brook-sys/senai-courses-track/internal/scraper"
 	"github.com/Brook-sys/senai-courses-track/internal/storage"
+	"github.com/Brook-sys/senai-courses-track/internal/telegramclient"
 )
 
 type Scheduler struct {
@@ -16,6 +20,13 @@ type Scheduler struct {
 	scraper   *scraper.Scraper
 	notifiers *notifier.NotifierManager
 	wake      chan struct{}
+
+	mu          sync.Mutex
+	running     bool
+	lastRun     time.Time
+	lastSuccess time.Time
+	lastError   error
+	nextRun     time.Time
 }
 
 func New(db *storage.DB, s *scraper.Scraper) *Scheduler {
@@ -27,20 +38,28 @@ func New(db *storage.DB, s *scraper.Scraper) *Scheduler {
 	}
 }
 
-func (sch *Scheduler) Start(spec string) {
-	notifier.RegisterFromConfig(sch.notifiers, sch.db.GetConfig)
-	go sch.loop()
+func (sch *Scheduler) Start(ctx context.Context, client telegramclient.Client) {
+	notifier.RegisterFromConfig(sch.notifiers, sch.db, client)
+	go sch.loop(ctx)
 	log.Printf("Scheduler started with interval: %s", sch.GetInterval().String())
 }
 
-func (sch *Scheduler) loop() {
+func (sch *Scheduler) loop(ctx context.Context) {
 	for {
 		interval := sch.GetInterval()
+
+		sch.mu.Lock()
+		sch.nextRun = time.Now().Add(interval)
+		sch.mu.Unlock()
+
 		timer := time.NewTimer(interval)
 		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
 		case <-timer.C:
 			log.Println("Running scheduled update...")
-			sch.RunUpdate()
+			sch.RunUpdate(ctx)
 		case <-sch.wake:
 			if !timer.Stop() {
 				select {
@@ -66,8 +85,12 @@ func (sch *Scheduler) GetInterval() time.Duration {
 }
 
 func (sch *Scheduler) SetIntervalMinutes(minutes string) error {
-	if _, err := strconv.Atoi(minutes); err != nil {
+	m, err := strconv.Atoi(minutes)
+	if err != nil {
 		return err
+	}
+	if m < 5 || m > 525600 {
+		return fmt.Errorf("interval must be between 5 and 525600 minutes")
 	}
 	if err := sch.db.SetConfig("sync_interval_minutes", minutes); err != nil {
 		return err
@@ -79,20 +102,59 @@ func (sch *Scheduler) SetIntervalMinutes(minutes string) error {
 	return nil
 }
 
-func (sch *Scheduler) RunUpdate() {
+func (sch *Scheduler) RunUpdate(ctx context.Context) {
+	sch.mu.Lock()
+	if sch.running {
+		sch.mu.Unlock()
+		log.Println("RunUpdate skipped: already running")
+		return
+	}
+	sch.running = true
+	sch.lastRun = time.Now()
+	sch.mu.Unlock()
+
+	defer func() {
+		sch.mu.Lock()
+		sch.running = false
+		sch.mu.Unlock()
+	}()
+
+	var runErr error
+	defer func() {
+		sch.mu.Lock()
+		if runErr != nil {
+			sch.lastError = runErr
+		} else {
+			sch.lastError = nil
+			sch.lastSuccess = time.Now()
+		}
+		sch.mu.Unlock()
+	}()
+
 	subs, err := sch.db.GetActiveSubscriptions()
 	if err != nil {
+		runErr = err
 		log.Println("error getting subs:", err)
 		return
 	}
 
 	for _, sub := range subs {
+		if ctx.Err() != nil {
+			runErr = ctx.Err()
+			return
+		}
+
 		var filters map[string]string
-		json.Unmarshal([]byte(sub.Filters), &filters)
+		if err := json.Unmarshal([]byte(sub.Filters), &filters); err != nil {
+			runErr = err
+			log.Printf("invalid filters for %s: %v", sub.Name, err)
+			continue
+		}
 
 		filterKey := buildFilterKey(filters)
 		courses, err := sch.scraper.FetchCourses(filters)
 		if err != nil {
+			runErr = err
 			log.Printf("fetch error for %s: %v", sub.Name, err)
 			continue
 		}
@@ -109,13 +171,17 @@ func (sch *Scheduler) RunUpdate() {
 					FilterKey: filterKey,
 					FirstSeen: time.Now(),
 				}
-				// Notify
-				if err := sch.notifiers.NotifyAll(c, sub.Name); err != nil {
-					log.Printf("Failed to notify %s, skipping database save to retry later", c.ID)
+				if err := sch.notifiers.NotifyAll(ctx, c, sub.Name); err != nil {
+					runErr = err
+					log.Printf("Failed to notify %s on any channel, skipping database save to retry later", c.ID)
 					continue
 				}
 
-				sch.db.SaveCourse(sc)
+				if err := sch.db.SaveCourse(sc); err != nil {
+					runErr = err
+					log.Printf("save error for %s: %v", c.ID, err)
+					continue
+				}
 				log.Printf("NEW COURSE: %s (sub: %s)", c.Title, sub.Name)
 			}
 		}
@@ -134,5 +200,31 @@ func (sch *Scheduler) AddSubscription(name string, filters map[string]string) (i
 }
 
 func (sch *Scheduler) TriggerNow() {
-	go sch.RunUpdate()
+	go sch.RunUpdate(context.Background())
+}
+
+type SchedulerStatus struct {
+	Running     bool      `json:"running"`
+	LastRun     time.Time `json:"lastRun"`
+	LastSuccess time.Time `json:"lastSuccess"`
+	LastError   string    `json:"lastError,omitempty"`
+	NextRun     time.Time `json:"nextRun"`
+}
+
+func (sch *Scheduler) Status() SchedulerStatus {
+	sch.mu.Lock()
+	defer sch.mu.Unlock()
+
+	errStr := ""
+	if sch.lastError != nil {
+		errStr = sch.lastError.Error()
+	}
+
+	return SchedulerStatus{
+		Running:     sch.running,
+		LastRun:     sch.lastRun,
+		LastSuccess: sch.lastSuccess,
+		LastError:   errStr,
+		NextRun:     sch.nextRun,
+	}
 }

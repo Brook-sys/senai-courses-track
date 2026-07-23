@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/Brook-sys/senai-courses-track/internal/api"
 	"github.com/Brook-sys/senai-courses-track/internal/appconfig"
@@ -10,6 +15,7 @@ import (
 	"github.com/Brook-sys/senai-courses-track/internal/scraper"
 	"github.com/Brook-sys/senai-courses-track/internal/storage"
 	"github.com/Brook-sys/senai-courses-track/internal/telegrambot"
+	"github.com/Brook-sys/senai-courses-track/internal/telegramclient"
 )
 
 func main() {
@@ -20,16 +26,41 @@ func main() {
 	}
 	defer db.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	s := scraper.New()
+	tgClient := telegramclient.NewClient()
+
 	sched := scheduler.New(db, s)
+	sched.Start(ctx, tgClient)
 
-	// Schedule daily update at 08:00
-	sched.Start("0 8 * * *")
+	bot := telegrambot.New(db, s, tgClient)
+	bot.Start(ctx)
 
-	bot := telegrambot.New(db, s)
-	bot.Start()
+	r := api.NewRouter(db, s, sched, bot)
+	srv := &http.Server{
+		Addr:    cfg.Addr,
+		Handler: r,
+	}
 
-	r := api.NewRouter(db, s, sched)
-	log.Printf("Server starting on %s", cfg.Addr)
-	log.Fatal(http.ListenAndServe(cfg.Addr, r))
+	go func() {
+		log.Printf("Server starting on %s", cfg.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	log.Println("Shutting down...")
+	cancel() // Cancel context for bot and scheduler
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
 }

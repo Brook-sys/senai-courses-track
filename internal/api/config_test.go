@@ -21,7 +21,7 @@ func TestGetConfigDoesNotExposeTelegramToken(t *testing.T) {
 	if err := db.SetConfig("telegram_token", secret); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetConfig("telegram_chat_id", "987654321"); err != nil {
+	if _, err := db.AddTelegramRecipient(t.Context(), "987654321", "Teste"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,8 +37,8 @@ func TestGetConfigDoesNotExposeTelegramToken(t *testing.T) {
 	}
 
 	var body struct {
-		TelegramTokenConfigured bool   `json:"telegram_token_configured"`
-		TelegramChatID          string `json:"telegram_chat_id"`
+		TelegramTokenConfigured bool `json:"telegram_token_configured"`
+		TelegramRecipientCount  int  `json:"telegram_recipient_count"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestGetConfigDoesNotExposeTelegramToken(t *testing.T) {
 	if !body.TelegramTokenConfigured {
 		t.Fatal("telegram_token_configured = false, want true")
 	}
-	if body.TelegramChatID != "987654321" {
-		t.Fatalf("telegram_chat_id = %q, want %q", body.TelegramChatID, "987654321")
+	if body.TelegramRecipientCount != 1 {
+		t.Fatalf("telegram_recipient_count = %d, want 1", body.TelegramRecipientCount)
 	}
 }

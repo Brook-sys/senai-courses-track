@@ -1,57 +1,71 @@
 package notifier
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"net/http"
-	"net/url"
 
 	"github.com/Brook-sys/senai-courses-track/internal/scraper"
+	"github.com/Brook-sys/senai-courses-track/internal/storage"
+	"github.com/Brook-sys/senai-courses-track/internal/telegramclient"
 )
 
 type Notifier interface {
-	NotifyNewCourse(course interface{}, subName string) error
+	NotifyNewCourse(ctx context.Context, course interface{}, subName string) error
 	Name() string
 }
 
 type TelegramNotifier struct {
-	GetConfig func(string) (string, error)
+	Store  storage.TelegramConfigStore
+	Client telegramclient.Client
 }
 
 func (t *TelegramNotifier) Name() string { return "telegram" }
 
-func (t *TelegramNotifier) NotifyNewCourse(course interface{}, subName string) error {
-	token, _ := t.GetConfig("telegram_token")
-	chatID, _ := t.GetConfig("telegram_chat_id")
-
-	if token == "" || chatID == "" {
-		return nil
+func (t *TelegramNotifier) NotifyNewCourse(ctx context.Context, course interface{}, subName string) error {
+	token, err := t.Store.GetTelegramToken(ctx)
+	if err != nil || token == "" {
+		return nil // Not configured
 	}
 
+	recipients, err := t.Store.GetEnabledTelegramRecipients(ctx)
+	if err != nil || len(recipients) == 0 {
+		return nil // No recipients
+	}
+
+	var msg string
 	c, ok := course.(scraper.Course)
 	if !ok {
 		// Fallback for raw interface
-		msg := fmt.Sprintf("🆕 Novo curso em %s:\n%v", subName, course)
-		return t.send(token, chatID, msg)
+		msg = fmt.Sprintf("🆕 Novo curso em %s:\n%v", subName, course)
+	} else {
+		msg = formatCourseMessage(c, subName)
 	}
 
-	msg := formatCourseMessage(c, subName)
-	return t.send(token, chatID, msg)
-}
+	var firstErr error
+	successCount := 0
+	for _, recipient := range recipients {
+		err := t.Client.SendMessage(ctx, token, recipient.ChatID, msg, "HTML")
+		if err != nil {
+			errStr := err.Error()
+			if statusErr := t.Store.UpdateRecipientDeliveryStatus(ctx, recipient.ID, false, &errStr); statusErr != nil {
+				log.Printf("telegram delivery status error for recipient %d: %v", recipient.ID, statusErr)
+			}
+			log.Printf("telegram delivery error for recipient %d: %v", recipient.ID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 
-func (t *TelegramNotifier) send(token, chatID, msg string) error {
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-	resp, err := http.PostForm(apiURL, url.Values{
-		"chat_id":    {chatID},
-		"text":       {msg},
-		"parse_mode": {"HTML"},
-	})
-	if err != nil {
-		return err
+		successCount++
+		if statusErr := t.Store.UpdateRecipientDeliveryStatus(ctx, recipient.ID, true, nil); statusErr != nil {
+			log.Printf("telegram delivery status error for recipient %d: %v", recipient.ID, statusErr)
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("telegram error: %d", resp.StatusCode)
+
+	if successCount == 0 {
+		return firstErr
 	}
 	return nil
 }
@@ -68,10 +82,10 @@ func (m *NotifierManager) Register(n Notifier) {
 	m.notifiers = append(m.notifiers, n)
 }
 
-func (m *NotifierManager) NotifyAll(course interface{}, subName string) error {
+func (m *NotifierManager) NotifyAll(ctx context.Context, course interface{}, subName string) error {
 	var firstErr error
 	for _, n := range m.notifiers {
-		if err := n.NotifyNewCourse(course, subName); err != nil {
+		if err := n.NotifyNewCourse(ctx, course, subName); err != nil {
 			log.Printf("notifier %s error: %v", n.Name(), err)
 			if firstErr == nil {
 				firstErr = err
@@ -81,23 +95,7 @@ func (m *NotifierManager) NotifyAll(course interface{}, subName string) error {
 	return firstErr
 }
 
-func RegisterFromConfig(m *NotifierManager, getConfig func(string) (string, error)) {
-	m.Register(&TelegramNotifier{GetConfig: getConfig})
-	log.Println("Telegram notifier registered (dynamic)")
-}
-
-func SendTestMessage(token, chatID, msg string) error {
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-	resp, err := http.PostForm(apiURL, url.Values{
-		"chat_id": {chatID},
-		"text":    {msg},
-	})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("status %d", resp.StatusCode)
-	}
-	return nil
+func RegisterFromConfig(m *NotifierManager, store storage.TelegramConfigStore, client telegramclient.Client) {
+	m.Register(&TelegramNotifier{Store: store, Client: client})
+	log.Println("Telegram notifier registered (multi-recipient)")
 }

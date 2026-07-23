@@ -33,29 +33,8 @@ func New(path string) (*DB, error) {
 		return nil, err
 	}
 
-	schema := `
-	CREATE TABLE IF NOT EXISTS courses (
-		id TEXT,
-		title TEXT,
-		url TEXT,
-		filter_key TEXT,
-		first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (id, filter_key)
-	);
-	CREATE TABLE IF NOT EXISTS subscriptions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT,
-		filters TEXT,
-		active BOOLEAN DEFAULT 1,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	CREATE TABLE IF NOT EXISTS notifier_config (
-		key TEXT PRIMARY KEY,
-		value TEXT
-	);
-	`
-	_, err = db.Exec(schema)
-	if err != nil {
+	if err := runMigrations(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 

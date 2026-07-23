@@ -1,154 +1,200 @@
 package telegrambot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"log"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Brook-sys/senai-courses-track/internal/scraper"
 	"github.com/Brook-sys/senai-courses-track/internal/storage"
+	"github.com/Brook-sys/senai-courses-track/internal/telegramclient"
 )
 
 type Bot struct {
-	db         *storage.DB
-	scraper    *scraper.Scraper
-	token      string
-	chatID     string
-	lastUpdate int64
-	httpClient *http.Client
+	db      *storage.DB
+	scraper *scraper.Scraper
+	client  telegramclient.Client
+
+	mu           sync.Mutex
+	token        string
+	allowedChats map[string]bool
+
+	lastUpdateID  int64
+	lastToken     string
+	polling       bool
+	lastPollTime  time.Time
+	lastPollError error
 }
 
-type updateResponse struct {
-	OK     bool     `json:"ok"`
-	Result []update `json:"result"`
-}
-
-type update struct {
-	UpdateID      int64          `json:"update_id"`
-	Message       *message       `json:"message"`
-	CallbackQuery *callbackQuery `json:"callback_query"`
-}
-
-type message struct {
-	Chat chat   `json:"chat"`
-	Text string `json:"text"`
-}
-
-type chat struct {
-	ID int64 `json:"id"`
-}
-
-type callbackQuery struct {
-	ID      string  `json:"id"`
-	Data    string  `json:"data"`
-	Message message `json:"message"`
-}
-
-func New(db *storage.DB, s *scraper.Scraper) *Bot {
+func New(db *storage.DB, s *scraper.Scraper, client telegramclient.Client) *Bot {
 	return &Bot{
-		db:         db,
-		scraper:    s,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		db:           db,
+		scraper:      s,
+		client:       client,
+		allowedChats: make(map[string]bool),
 	}
 }
 
-func (b *Bot) Start() {
-	go b.loop()
+func (b *Bot) Start(ctx context.Context) {
+	go b.loop(ctx)
 }
 
-func (b *Bot) loop() {
+func (b *Bot) loop(ctx context.Context) {
 	for {
-		b.reloadConfig()
-		if b.token == "" || b.chatID == "" {
-			time.Sleep(10 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		b.reloadConfig(ctx)
+
+		b.mu.Lock()
+		token := b.token
+		b.mu.Unlock()
+
+		if token == "" {
+			b.mu.Lock()
+			b.polling = false
+			b.mu.Unlock()
+			if !wait(ctx, 10*time.Second) {
+				return
+			}
 			continue
 		}
 
-		updates, err := b.getUpdates()
+		b.mu.Lock()
+		b.polling = true
+		b.lastPollTime = time.Now()
+		offset := b.lastUpdateID
+		b.mu.Unlock()
+
+		updates, err := b.client.GetUpdates(ctx, token, offset, 20)
+
+		b.mu.Lock()
+		b.polling = false
+		b.lastPollError = err
+		if err == nil {
+			b.lastPollTime = time.Now()
+		}
+		b.mu.Unlock()
+
 		if err != nil {
 			log.Printf("telegram bot updates error: %v", err)
-			time.Sleep(5 * time.Second)
+			if !wait(ctx, 5*time.Second) {
+				return
+			}
 			continue
 		}
 
 		for _, upd := range updates {
-			if upd.UpdateID >= b.lastUpdate {
-				b.lastUpdate = upd.UpdateID + 1
+			b.mu.Lock()
+			if upd.UpdateID >= b.lastUpdateID {
+				b.lastUpdateID = upd.UpdateID + 1
 			}
-			b.handleUpdate(upd)
+			b.mu.Unlock()
+			b.handleUpdate(ctx, upd, token)
 		}
 	}
 }
 
-func (b *Bot) reloadConfig() {
-	token, _ := b.db.GetConfig("telegram_token")
-	chatID, _ := b.db.GetConfig("telegram_chat_id")
+func (b *Bot) reloadConfig(ctx context.Context) {
+	token, _ := b.db.GetTelegramToken(ctx)
+
+	recipients, err := b.db.GetEnabledTelegramRecipients(ctx)
+	allowedChats := make(map[string]bool)
+	if err == nil {
+		for _, r := range recipients {
+			allowedChats[r.ChatID] = true
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	b.token = token
-	b.chatID = chatID
+	b.allowedChats = allowedChats
+
+	if b.lastToken != "" && token != b.lastToken {
+		b.lastUpdateID = 0
+	}
+	b.lastToken = token
 }
 
-func (b *Bot) getUpdates() ([]update, error) {
-	u := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?timeout=20&offset=%d", b.token, b.lastUpdate)
-	resp, err := b.httpClient.Get(u)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var parsed updateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Result, nil
+type BotStatus struct {
+	Configured    bool      `json:"configured"`
+	Polling       bool      `json:"polling"`
+	LastPollTime  time.Time `json:"lastPollTime"`
+	LastPollError string    `json:"lastPollError,omitempty"`
 }
 
-func (b *Bot) handleUpdate(upd update) {
+func (b *Bot) Status() BotStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	errStr := ""
+	if b.lastPollError != nil {
+		errStr = b.lastPollError.Error()
+	}
+
+	return BotStatus{
+		Configured:    b.token != "",
+		Polling:       b.polling,
+		LastPollTime:  b.lastPollTime,
+		LastPollError: errStr,
+	}
+}
+
+func (b *Bot) handleUpdate(ctx context.Context, upd telegramclient.Update, token string) {
 	if upd.Message != nil {
 		if !b.allowedChat(upd.Message.Chat.ID) {
 			return
 		}
 		switch strings.TrimSpace(upd.Message.Text) {
 		case "/start", "/menu":
-			b.sendMenu(upd.Message.Chat.ID)
+			b.sendMenu(ctx, upd.Message.Chat.ID, token)
 		case "/filtros":
-			b.sendFilters(upd.Message.Chat.ID)
+			b.sendFilters(ctx, upd.Message.Chat.ID, token)
 		default:
-			b.sendText(upd.Message.Chat.ID, "Use /menu para abrir o menu do SENAI Track.")
+			b.sendText(ctx, upd.Message.Chat.ID, "Use /menu para abrir o menu do SENAI Track.", token)
 		}
 		return
 	}
 
-	if upd.CallbackQuery != nil {
+	if upd.CallbackQuery != nil && upd.CallbackQuery.Message != nil {
 		if !b.allowedChat(upd.CallbackQuery.Message.Chat.ID) {
 			return
 		}
-		b.answerCallback(upd.CallbackQuery.ID)
-		b.handleCallback(upd.CallbackQuery.Message.Chat.ID, upd.CallbackQuery.Data)
+		b.client.AnswerCallbackQuery(ctx, token, upd.CallbackQuery.ID)
+		b.handleCallback(ctx, upd.CallbackQuery.Message.Chat.ID, upd.CallbackQuery.Data, token)
 	}
 }
 
 func (b *Bot) allowedChat(chatID int64) bool {
-	allowed, err := strconv.ParseInt(b.chatID, 10, 64)
-	return err == nil && allowed == chatID
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	idStr := strconv.FormatInt(chatID, 10)
+	return b.allowedChats[idStr]
 }
 
-func (b *Bot) sendMenu(chatID int64) {
+func (b *Bot) sendMenu(ctx context.Context, chatID int64, token string) {
 	keyboard := inlineKeyboard([][]button{
 		{{Text: "📋 Ver filtros", Data: "filters"}},
 	})
-	b.sendHTML(chatID, "<b>SENAI Track</b>\nEscolha uma opção:", keyboard)
+	b.client.SendMessageWithMarkup(ctx, token, strconv.FormatInt(chatID, 10), "<b>SENAI Track</b>\nEscolha uma opção:", "HTML", keyboard)
 }
 
-func (b *Bot) sendFilters(chatID int64) {
+func (b *Bot) sendFilters(ctx context.Context, chatID int64, token string) {
 	subs, err := b.db.GetSubscriptions()
 	if err != nil || len(subs) == 0 {
-		b.sendText(chatID, "Nenhuma assinatura cadastrada.")
+		b.sendText(ctx, chatID, "Nenhuma assinatura cadastrada.", token)
 		return
 	}
 
@@ -165,35 +211,35 @@ func (b *Bot) sendFilters(chatID int64) {
 	}
 	rows = append(rows, []button{{Text: "⬅️ Menu", Data: "menu"}})
 
-	b.sendHTML(chatID, "<b>Filtros cadastrados</b>\nSelecione um filtro para ver os cursos disponíveis:", inlineKeyboard(rows))
+	b.client.SendMessageWithMarkup(ctx, token, strconv.FormatInt(chatID, 10), "<b>Filtros cadastrados</b>\nSelecione um filtro para ver os cursos disponíveis:", "HTML", inlineKeyboard(rows))
 }
 
-func (b *Bot) handleCallback(chatID int64, data string) {
+func (b *Bot) handleCallback(ctx context.Context, chatID int64, data string, token string) {
 	switch {
 	case data == "menu":
-		b.sendMenu(chatID)
+		b.sendMenu(ctx, chatID, token)
 	case data == "filters":
-		b.sendFilters(chatID)
+		b.sendFilters(ctx, chatID, token)
 	case strings.HasPrefix(data, "sub:"):
 		id := strings.TrimPrefix(data, "sub:")
-		b.sendSubscriptionCourses(chatID, id)
+		b.sendSubscriptionCourses(ctx, chatID, id, token)
 	}
 }
 
-func (b *Bot) sendSubscriptionCourses(chatID int64, id string) {
+func (b *Bot) sendSubscriptionCourses(ctx context.Context, chatID int64, id string, token string) {
 	sub, ok := b.findSubscription(id)
 	if !ok {
-		b.sendText(chatID, "Filtro não encontrado.")
+		b.sendText(ctx, chatID, "Filtro não encontrado.", token)
 		return
 	}
 
 	filters := map[string]string{}
 	json.Unmarshal([]byte(sub.Filters), &filters)
 
-	b.sendText(chatID, fmt.Sprintf("Buscando cursos para: %s...", sub.Name))
+	b.sendText(ctx, chatID, fmt.Sprintf("Buscando cursos para: %s...", sub.Name), token)
 	courses, err := b.scraper.FetchCourses(filters)
 	if err != nil {
-		b.sendText(chatID, "Erro ao buscar cursos no SENAI.")
+		b.sendText(ctx, chatID, "Erro ao buscar cursos no SENAI.", token)
 		return
 	}
 
@@ -205,14 +251,14 @@ func (b *Bot) sendSubscriptionCourses(chatID int64, id string) {
 	}
 
 	if len(available) == 0 {
-		b.sendHTML(chatID, fmt.Sprintf("<b>%s</b>\nNenhum curso com turma disponível agora.", esc(sub.Name)), "")
+		b.client.SendMessage(ctx, token, strconv.FormatInt(chatID, 10), fmt.Sprintf("<b>%s</b>\nNenhum curso com turma disponível agora.", esc(sub.Name)), "HTML")
 		return
 	}
 
-	b.sendHTML(chatID, fmt.Sprintf("<b>%s</b>\n%d curso(s) com turma disponível:", esc(sub.Name), len(available)), "")
+	b.client.SendMessage(ctx, token, strconv.FormatInt(chatID, 10), fmt.Sprintf("<b>%s</b>\n%d curso(s) com turma disponível:", esc(sub.Name), len(available)), "HTML")
 
 	for _, c := range available {
-		b.sendCourse(chatID, c)
+		b.sendCourse(ctx, chatID, c, token)
 	}
 }
 
@@ -229,7 +275,7 @@ func (b *Bot) findSubscription(id string) (storage.Subscription, bool) {
 	return storage.Subscription{}, false
 }
 
-func (b *Bot) sendCourse(chatID int64, c scraper.Course) {
+func (b *Bot) sendCourse(ctx context.Context, chatID int64, c scraper.Course, token string) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("📚 <b>%s</b>\n", esc(c.Title)))
 	if c.Duration != "" {
@@ -264,38 +310,11 @@ func (b *Bot) sendCourse(chatID int64, c scraper.Course) {
 			sb.WriteString(fmt.Sprintf("🕒 <b>Horário:</b> %s\n", esc(t.Schedule)))
 		}
 	}
-	b.sendHTML(chatID, sb.String(), "")
+	b.client.SendMessage(ctx, token, strconv.FormatInt(chatID, 10), sb.String(), "HTML")
 }
 
-func (b *Bot) sendText(chatID int64, text string) {
-	b.sendHTML(chatID, esc(text), "")
-}
-
-func (b *Bot) sendHTML(chatID int64, text string, replyMarkup string) {
-	form := url.Values{}
-	form.Set("chat_id", fmt.Sprint(chatID))
-	form.Set("text", text)
-	form.Set("parse_mode", "HTML")
-	form.Set("disable_web_page_preview", "true")
-	if replyMarkup != "" {
-		form.Set("reply_markup", replyMarkup)
-	}
-
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.token)
-	resp, err := b.httpClient.PostForm(apiURL, form)
-	if err != nil {
-		log.Printf("telegram send error: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-}
-
-func (b *Bot) answerCallback(id string) {
-	if id == "" {
-		return
-	}
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", b.token)
-	_, _ = b.httpClient.PostForm(apiURL, url.Values{"callback_query_id": {id}})
+func (b *Bot) sendText(ctx context.Context, chatID int64, text string, token string) {
+	b.client.SendMessage(ctx, token, strconv.FormatInt(chatID, 10), esc(text), "HTML")
 }
 
 type button struct {
@@ -305,10 +324,21 @@ type button struct {
 
 func inlineKeyboard(rows [][]button) string {
 	payload := map[string][][]button{"inline_keyboard": rows}
-	b, _ := json.Marshal(payload)
-	return string(b)
+	bt, _ := json.Marshal(payload)
+	return string(bt)
 }
 
 func esc(s string) string {
 	return html.EscapeString(s)
+}
+
+func wait(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

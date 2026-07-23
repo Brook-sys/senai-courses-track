@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ type MockNotifier struct {
 	Fail bool
 }
 
-func (m *MockNotifier) NotifyNewCourse(course interface{}, subName string) error {
+func (m *MockNotifier) NotifyNewCourse(ctx context.Context, course interface{}, subName string) error {
 	if m.Fail {
 		return errors.New("simulated network failure")
 	}
@@ -61,14 +62,6 @@ func TestRunUpdateDoesNotSaveOnNotificationFailure(t *testing.T) {
 	mockNotif := &MockNotifier{Fail: true}
 	sch.notifiers.Register(mockNotif)
 
-	// In a real scheduler, RunUpdate uses the underlying FetchCourses method directly.
-	// To cleanly mock FetchCourses, we need a small interface wrapper in Scheduler or
-	// we just rely on testing the logical flow manually or with a real local server.
-
-	// Since scraper is a concrete struct, the easiest way to inject failure logic
-	// without refactoring the whole architecture to interfaces is just testing the DB state.
-	// We'll refactor the test approach simply:
-
 	// Insert manually into the pipeline:
 	sc := storage.StoredCourse{
 		ID:        "course_123",
@@ -77,7 +70,7 @@ func TestRunUpdateDoesNotSaveOnNotificationFailure(t *testing.T) {
 		FirstSeen: time.Now(),
 	}
 
-	err = sch.notifiers.NotifyAll(sc, "Test Sub")
+	err = sch.notifiers.NotifyAll(context.Background(), sc, "Test Sub")
 	if err == nil {
 		t.Fatal("expected simulated failure")
 	}
@@ -94,7 +87,7 @@ func TestRunUpdateDoesNotSaveOnNotificationFailure(t *testing.T) {
 
 	// Now try with successful notification
 	mockNotif.Fail = false
-	err = sch.notifiers.NotifyAll(sc, "Test Sub")
+	err = sch.notifiers.NotifyAll(context.Background(), sc, "Test Sub")
 	if err != nil {
 		t.Fatal("unexpected failure")
 	}

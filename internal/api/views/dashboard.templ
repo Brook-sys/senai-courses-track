@@ -2,8 +2,9 @@ package views
 
 import (
 	"fmt"
-	"github.com/alpine/senai-courses-track/internal/scraper"
-	"github.com/alpine/senai-courses-track/internal/storage"
+	"github.com/Brook-sys/senai-courses-track/internal/scheduler"
+	"github.com/Brook-sys/senai-courses-track/internal/scraper"
+	"github.com/Brook-sys/senai-courses-track/internal/storage"
 )
 
 templ Layout(title string) {
@@ -44,11 +45,23 @@ templ Layout(title string) {
 			<main class="max-w-7xl mx-auto px-4 py-8">
 				{ children... }
 			</main>
+			<script>
+				document.addEventListener('DOMContentLoaded', function(){
+					if (window.TomSelect && document.querySelector('#cidade-select')) {
+						new TomSelect('#cidade-select', {
+							create: false,
+							allowEmptyOption: true,
+							sortField: {field: 'text', direction: 'asc'},
+							plugins: ['dropdown_input']
+						});
+					}
+				});
+			</script>
 		</body>
 	</html>
 }
 
-templ Dashboard(tokenConfigured bool, chat string, interval string, subs []storage.Subscription, courses []storage.StoredCourse, liveCourses []scraper.Course, cities []scraper.CityOption) {
+templ Dashboard(subs []storage.Subscription, courses []storage.StoredCourse, liveCourses []scraper.Course, cities []scraper.CityOption) {
 	@Layout("SENAI Tracker - Dashboard") {
 		<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
 			<div class="md:col-span-2 space-y-6">
@@ -80,15 +93,15 @@ templ Dashboard(tokenConfigured bool, chat string, interval string, subs []stora
 						<button type="submit" class="w-full bg-red-600 text-white font-medium py-2 px-4 rounded-md hover:bg-red-700">Salvar Assinatura</button>
 					</form>
 				</section>
-
 				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
 					<h2 class="text-xl font-semibold mb-4 text-gray-700 border-b pb-2 flex items-center gap-2">
 						<i class="fa-solid fa-list-check text-red-600"></i>
 						Assinaturas Ativas
 					</h2>
-					<div id="subscriptions-list">@SubscriptionsList(subs)</div>
+					<div id="subscriptions-list">
+						@SubscriptionsList(subs)
+					</div>
 				</section>
-
 				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
 					<div class="flex justify-between items-center border-b pb-2 mb-4">
 						<h2 class="text-xl font-semibold text-gray-700 flex items-center gap-2">
@@ -110,7 +123,6 @@ templ Dashboard(tokenConfigured bool, chat string, interval string, subs []stora
 						</div>
 					</div>
 				</section>
-
 				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
 					<div class="flex justify-between items-center border-b pb-2 mb-4">
 						<h2 class="text-xl font-semibold text-gray-700 flex items-center gap-2">
@@ -128,48 +140,150 @@ templ Dashboard(tokenConfigured bool, chat string, interval string, subs []stora
 							</button>
 						</div>
 					</div>
-					<div id="courses-list">@CoursesList(courses)</div>
+					<div id="courses-list">
+						@CoursesList(courses)
+					</div>
 				</section>
 			</div>
-
 			<div class="space-y-6">
 				<section class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
 					<h2 class="text-xl font-semibold mb-4 text-gray-700 border-b pb-2 flex items-center gap-2">
 						<i class="fa-brands fa-telegram text-[#0088cc]"></i>
 						Notificações Telegram
 					</h2>
-					<form hx-post="/api/config/htmx" class="space-y-3 bg-[#f4f9ff] p-4 rounded-md border border-[#e1efff]">
-						<label class="block text-xs font-medium text-gray-600">Bot Token</label>
-						if tokenConfigured {
-							<input name="telegram_token" type="password" value="" placeholder="Token configurado — deixe em branco para manter" autocomplete="new-password" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
-						} else {
-							<input name="telegram_token" type="password" value="" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" autocomplete="new-password" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
-						}
-
-						<label class="block text-xs font-medium text-gray-600">Chat ID</label>
-						<input name="telegram_chat_id" type="text" value={ chat } placeholder="123456789" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
-
-						<label class="block text-xs font-medium text-gray-600">Intervalo de busca automática</label>
-						<select name="sync_interval_minutes" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
-							<option value="720" selected?={ interval == "720" }>A cada 12 horas</option>
-							<option value="1440" selected?={ interval == "1440" }>Uma vez por dia</option>
-							<option value="2880" selected?={ interval == "2880" }>A cada 2 dias</option>
-						</select>
-						<p class="text-xs text-gray-500">A busca automática verifica cursos novos nos filtros ativos e avisa no Telegram.</p>
-
-						<div class="flex gap-2 pt-2">
-							<button type="submit" class="flex-1 bg-blue-600 text-white text-sm font-medium py-2 rounded hover:bg-blue-700 transition-colors shadow-sm">
-								<i class="fa-solid fa-floppy-disk mr-1"></i> Salvar
-							</button>
-							<button type="button" onclick="testTelegram()" class="flex-1 bg-white border border-blue-600 text-blue-600 text-sm font-medium py-2 rounded hover:bg-blue-50 transition-colors">
-								<i class="fa-solid fa-paper-plane mr-1"></i> Testar
-							</button>
+					<div id="telegram-panel" hx-get="/api/telegram/panel" hx-trigger="load">
+						<div class="py-4 text-center text-gray-500">
+							<i class="fa-solid fa-circle-notch fa-spin"></i> Carregando configurações...
 						</div>
-					</form>
+					</div>
 				</section>
 			</div>
 		</div>
 	}
+}
+
+templ TelegramPanel(maskedToken string, recipients []storage.TelegramRecipient, interval string, status scheduler.SchedulerStatus) {
+	<div class="space-y-4">
+		<div class="grid grid-cols-2 gap-2 text-xs">
+			<div class="rounded border border-gray-200 bg-gray-50 p-2">
+				<div class="text-gray-500">Scheduler</div>
+				if status.Running {
+					<div class="font-medium text-blue-700">Sincronizando agora</div>
+				} else {
+					<div class="font-medium text-green-700">Ativo</div>
+				}
+			</div>
+			<div class="rounded border border-gray-200 bg-gray-50 p-2">
+				<div class="text-gray-500">Próxima busca</div>
+				if status.NextRun.IsZero() {
+					<div class="font-medium text-gray-700">Aguardando início</div>
+				} else {
+					<div class="font-medium text-gray-700">{ status.NextRun.Format("02/01 15:04") }</div>
+				}
+			</div>
+		</div>
+		if status.LastError != "" {
+			<div class="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">Último erro: { status.LastError }</div>
+		}
+		<form hx-post="/api/telegram/token" hx-target="#telegram-panel" class="bg-[#f4f9ff] p-4 rounded-md border border-[#e1efff] space-y-3">
+			<label class="block text-xs font-medium text-gray-600">Bot Token</label>
+			if maskedToken != "" {
+				<div class="rounded border border-blue-100 bg-white px-2 py-1.5 font-mono text-xs text-blue-800">Configurado: { maskedToken }</div>
+			}
+			<div class="flex gap-2">
+				<input name="telegram_token" type="password" placeholder="Novo token" autocomplete="new-password" required class="flex-1 border border-blue-200 rounded px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white"/>
+				<button type="submit" class="bg-blue-600 text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-blue-700">Salvar</button>
+			</div>
+		</form>
+		<div class="bg-white rounded-md border border-gray-200 p-4 space-y-3">
+			<h3 class="text-sm font-semibold text-gray-700 border-b pb-2">Destinatários (Chat IDs)</h3>
+			if len(recipients) == 0 {
+				<div class="text-xs text-gray-500 text-center py-2">Nenhum chat configurado.</div>
+			} else {
+				<ul class="space-y-2">
+					for _, r := range recipients {
+						<li class="text-sm p-2 bg-gray-50 rounded border border-gray-100 space-y-2">
+							<div class="flex items-center justify-between">
+								<div>
+									<div class="flex items-center gap-2 font-medium text-gray-800">
+										{ r.Label }
+										if r.Enabled {
+											<span class="rounded-full bg-green-100 px-2 py-0.5 text-[10px] text-green-700">Ativo</span>
+										} else {
+											<span class="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] text-gray-600">Pausado</span>
+										}
+									</div>
+									<div class="text-xs text-gray-500 font-mono">{ r.ChatID }</div>
+								</div>
+								<div class="flex gap-1">
+									<button hx-post={ fmt.Sprintf("/api/telegram/recipients/%d/toggle?enabled=%t", r.ID, !r.Enabled) } hx-target="#telegram-panel" class="text-gray-600 hover:bg-gray-200 px-2 py-1 rounded text-xs" title="Ativar ou pausar">
+										if r.Enabled {
+											<i class="fa-solid fa-pause"></i>
+										} else {
+											<i class="fa-solid fa-play"></i>
+										}
+									</button>
+									<button hx-post={ fmt.Sprintf("/api/telegram/recipients/%d/test", r.ID) } hx-target="#trigger-result" class="text-blue-600 hover:bg-blue-50 px-2 py-1 rounded text-xs transition-colors" title="Testar">
+										<i class="fa-solid fa-paper-plane"></i>
+									</button>
+									<button hx-delete={ fmt.Sprintf("/api/telegram/recipients/%d", r.ID) } hx-target="#telegram-panel" hx-confirm="Remover destinatário?" class="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-xs transition-colors" title="Remover">
+										<i class="fa-solid fa-trash-can"></i>
+									</button>
+								</div>
+							</div>
+							<div class="grid grid-cols-2 gap-2 text-[11px] text-gray-500">
+								<div>
+									Último teste:
+									if r.LastTestAt == nil {
+										<span>não realizado</span>
+									} else if r.LastTestOk != nil && *r.LastTestOk {
+										<span class="text-green-700">OK em { r.LastTestAt.Format("02/01 15:04") }</span>
+									} else {
+										<span class="text-red-700">falhou em { r.LastTestAt.Format("02/01 15:04") }</span>
+									}
+								</div>
+								<div>
+									Último envio:
+									if r.LastDeliveryAt == nil {
+										<span>sem histórico</span>
+									} else if r.LastDeliveryOk != nil && *r.LastDeliveryOk {
+										<span class="text-green-700">OK em { r.LastDeliveryAt.Format("02/01 15:04") }</span>
+									} else {
+										<span class="text-red-700">falhou em { r.LastDeliveryAt.Format("02/01 15:04") }</span>
+									}
+								</div>
+							</div>
+						</li>
+					}
+				</ul>
+			}
+			<form hx-post="/api/telegram/recipients" hx-target="#telegram-panel" class="pt-2 border-t mt-3 flex gap-2">
+				<input name="chat_id" type="text" placeholder="Novo Chat ID" required class="w-2/5 border border-gray-300 rounded px-2 py-1.5 text-xs"/>
+				<input name="label" type="text" placeholder="Nome/Label" required class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-xs"/>
+				<button type="submit" class="bg-gray-800 text-white px-2 py-1.5 rounded text-xs font-medium hover:bg-gray-900"><i class="fa-solid fa-plus"></i></button>
+			</form>
+		</div>
+		<form hx-post="/api/telegram/interval" hx-target="#telegram-panel" class="bg-gray-50 p-4 rounded-md border border-gray-200 space-y-3">
+			<label class="block text-xs font-medium text-gray-600">Intervalo de busca automática em minutos</label>
+			<div class="flex gap-2">
+				<input name="sync_interval_minutes" type="number" min="5" max="525600" required value={ interval } class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm"/>
+				<button type="submit" class="bg-gray-800 text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-gray-900">Salvar</button>
+			</div>
+			<p class="text-[11px] text-gray-500">Exemplos: 60 = uma hora, 720 = 12 horas, 1440 = um dia.</p>
+		</form>
+	</div>
+}
+
+templ AlertSuccess(msg string) {
+	<div class="p-3 mb-2 bg-green-50 text-green-700 border border-green-200 rounded text-sm" role="alert">
+		<i class="fa-solid fa-check-circle mr-1"></i> { msg }
+	</div>
+}
+
+templ AlertError(msg string) {
+	<div class="p-3 mb-2 bg-red-50 text-red-700 border border-red-200 rounded text-sm" role="alert">
+		<i class="fa-solid fa-triangle-exclamation mr-1"></i> { msg }
+	</div>
 }
 
 templ SubscriptionsList(subs []storage.Subscription) {
@@ -236,6 +350,7 @@ templ CoursesList(courses []storage.StoredCourse) {
 		</div>
 	}
 }
+
 templ LiveCoursesList(courses []scraper.Course) {
 	if len(courses) == 0 {
 		<div class="text-center py-8 text-gray-500">Nenhum curso com turma disponível encontrado para o filtro principal.</div>
@@ -261,7 +376,6 @@ templ LiveCoursesList(courses []scraper.Course) {
 							</div>
 							<span class="shrink-0 px-2 py-1 h-fit rounded-full bg-green-50 text-green-700 text-xs font-medium">Turma disponível</span>
 						</div>
-
 						<div class="mt-4 space-y-3">
 							for _, t := range c.Turmas {
 								<div class="bg-white border rounded p-3 text-sm">
@@ -272,31 +386,7 @@ templ LiveCoursesList(courses []scraper.Course) {
 												{ t.Unit }
 												if t.Phone != "" {
 													<span class="text-gray-500 text-sm ml-2">📞 { t.Phone }</span>
-		<script>
-			document.addEventListener('DOMContentLoaded', function(){
-				if (window.TomSelect && document.querySelector('#cidade-select')) {
-					new TomSelect('#cidade-select', {
-						create: false,
-						allowEmptyOption: true,
-						sortField: {field: 'text', direction: 'asc'},
-						plugins: ['dropdown_input']
-					});
-				}
-			});
-
-			async function testTelegram(){
-				const token = document.querySelector('[name=telegram_token]').value;
-				const chat = document.querySelector('[name=telegram_chat_id]').value;
-				const res = await fetch('/api/test-telegram',{
-					method:'POST',
-					headers:{'Content-Type':'application/json'},
-					body:JSON.stringify({Token:token, ChatID:chat, Message:'🤖 Teste do SENAI Tracker! Configuração OK.'})
-				});
-				if (res.ok) alert('Mensagem enviada com sucesso para o Telegram!');
-				else alert('Erro ao enviar mensagem. Verifique o Token e o Chat ID.');
-			}
-		</script>
-	}
+												}
 											</div>
 											if t.Address != "" {
 												<div class="text-sm text-gray-600 mt-0.5">📍 { t.Address }</div>
